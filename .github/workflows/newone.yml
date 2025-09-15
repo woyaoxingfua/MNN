@@ -13,16 +13,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive # 确保子模块也被克隆
+          submodules: recursive
 
       # 第 2 步：选择一个稳定的 Xcode 版本
       - name: Select Xcode Version
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '15.2' # 建议固定版本以保证稳定性
+          xcode-version: '16.4'
 
       # 第 3 步：安装 CocoaPods 依赖
-      # 使用缓存可以极大加速后续的构建
       - name: Cache CocoaPods
         uses: actions/cache@v4
         with:
@@ -32,18 +31,16 @@ jobs:
             ${{ runner.os }}-pods-
             
       - name: Install Pods
-        # 进入正确的目录并执行 pod install
         run: |
           cd apps/iOS/MNNLLMChat
           pod install
 
-      # 第 4 步：【关键】编译和归档 (Archive)
-      # 重点：使用 -workspace 和 .xcworkspace 文件！
+      # 第 4 步：编译和归档 (Archive)
       - name: Archive Project
         run: |
           xcodebuild archive \
             -workspace apps/iOS/MNNLLMChat/MNNLLMChat.xcworkspace \
-            -scheme MNNLLMChat \
+            -scheme MNNLLMiOS \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/MNNLLMChat.xcarchive \
