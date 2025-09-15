@@ -1,79 +1,91 @@
-name: Build MNNLLMChat iOS (Unsigned)
+name: iOS Build (Unsigned IPA)
 
 on:
-  push:
-    paths:
-      - 'apps/iOS/MNNLLMChat/**'
-      - 'package_scripts/ios/**'
-      - 'transformers/llm/engine/ios/**'
-  pull_request:
-    paths:
-      - 'apps/iOS/MNNLLMChat/**'
   workflow_dispatch:
 
 jobs:
-  build-ios:
+  build:
+    name: Build and Create Unsigned IPA
     runs-on: macos-latest
+
     steps:
-      - name: Checkout code
+      # 第 1 步：检出您的代码仓库
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive # 确保子模块也被克隆
 
-      - name: Install dependencies
-        run: |
-          brew install coreutils
-          # 增加 sudo 以获取 root 权限
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-          # 额外添加：接受 Xcode 许可证（CI 环境可能需要）
-          sudo xcodebuild -license accept
+      # 第 2 步：选择一个稳定的 Xcode 版本
+      - name: Select Xcode Version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.2' # 建议固定版本以保证稳定性
 
-      - name: Build MNN.framework
-        run: |
-          sh package_scripts/ios/buildiOS.sh "
-          -DMNN_ARM82=ON
-          -DMNN_LOW_MEMORY=ON
-          -DMNN_SUPPORT_TRANSFORMER_FUSE=ON
-          -DMNN_BUILD_LLM=ON
-          -DMNN_CPU_WEIGHT_DEQUANT_GEMM=ON
-          -DMNN_METAL=ON
-          -DMNN_BUILD_DIFFUSION=ON
-          -DMNN_OPENCL=OFF
-          -DMNN_SEP_BUILD=OFF
-          -DLLM_SUPPORT_AUDIO=ON
-          -DMNN_BUILD_AUDIO=ON
-          -DLLM_SUPPORT_VISION=ON
-          -DMNN_BUILD_OPENCV=ON
-          -DMNN_IMGCODECS=ON
-          "
-
-      - name: Copy MNN.framework to project
-        run: |
-          mv MNN-iOS-CPU-GPU/Static/MNN.framework apps/iOS/MNNLLMChat/
-
-      - name: Build unsigned IPA
+      # 第 3 步：安装 CocoaPods 依赖
+      # 使用缓存可以极大加速后续的构建
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: apps/iOS/MNNLLMChat/Pods
+          key: ${{ runner.os }}-pods-${{ hashFiles('**/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+            
+      - name: Install Pods
+        # 进入正确的目录并执行 pod install
         run: |
           cd apps/iOS/MNNLLMChat
-          # 创建编译输出目录
-          mkdir -p build/Release-iphoneos
-          # 编译项目（无签名）
-          xcodebuild build \
-            -project MNNLLMiOS.xcodeproj \
-            -scheme MNNLLMiOS \
+          pod install
+
+      # 第 4 步：【关键】编译和归档 (Archive)
+      # 重点：使用 -workspace 和 .xcworkspace 文件！
+      - name: Archive Project
+        run: |
+          xcodebuild archive \
+            -workspace apps/iOS/MNNLLMChat/MNNLLMChat.xcworkspace \
+            -scheme MNNLLMChat \
             -configuration Release \
-            -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            BUILD_DIR=build \
+            -archivePath build/MNNLLMChat.xcarchive \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
-          # 打包成 IPA
-          mkdir -p Payload
-          cp -R build/Release-iphoneos/MNNLLMiOS.app Payload/
-          zip -r MNNLLMChat-unsigned.ipa Payload
 
-      - name: Upload IPA artifact
+      # 第 5 步：创建用于导出未签名 IPA 的 Plist 文件
+      - name: Create ExportOptions.plist
+        run: |
+          cat > ExportOptions.plist <<-EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>ad-hoc</string> 
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>provisioningProfiles</key>
+              <dict/>
+              <key>signingCertificate</key>
+              <string></string>
+              <key>teamID</key>
+              <string></string>
+              <key>compileBitcode</key>
+              <false/>
+          </dict>
+          </plist>
+          EOF
+          
+      # 第 6 步：导出未签名的 IPA 包
+      - name: Export Unsigned IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/MNNLLMChat.xcarchive \
+            -exportPath build/ipa \
+            -exportOptionsPlist ExportOptions.plist
+
+      # 第 7 步：上传构建产物 (IPA)
+      - name: Upload Unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: mnnllmchat-unsigned-ipa
-          path: apps/iOS/MNNLLMChat/MNNLLMChat-unsigned.ipa
+          name: MNNLLMChat-unsigned-ipa
+          path: build/ipa/*.ipa
