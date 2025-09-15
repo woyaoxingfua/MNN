@@ -1,14 +1,15 @@
+# .github/workflows/build-unsigned-ipa.yml
 name: Build unsigned IPA (MNNLLMChat)
 
 on:
   workflow_dispatch:
     inputs:
       xcode-version:
-        description: 'Xcode version (e.g. 15.4) - use "latest" for default'
+        description: 'Xcode version (e.g. 15.4) or "latest"'
         required: false
         default: 'latest'
       scheme:
-        description: 'Scheme name (leave blank to auto-detect)'
+        description: 'Scheme name (e.g. MNNLLMChat). 如果自动检测失败，请在这里填'
         required: false
         default: ''
 
@@ -16,7 +17,7 @@ jobs:
   build-unsigned:
     runs-on: macos-latest
     env:
-      PROJECT_DIR: apps/iOS/MNNLLMChat   # <-- 如果你的路径不同，修改这里
+      PROJECT_DIR: apps/iOS/MNNLLMChat   # <-- 根据你的目录结构修改
       BUILD_DIR: ${{ github.workspace }}/build
 
     steps:
@@ -31,89 +32,102 @@ jobs:
         with:
           xcode-version: ${{ github.event.inputs['xcode-version'] }}
 
-      - name: Install CocoaPods (if Podfile exists) & deps
+      - name: Install CocoaPods (if needed)
         run: |
           cd "${PROJECT_DIR}"
           if [ -f Podfile ]; then
-            echo "Podfile detected — installing CocoaPods and running pod install"
-            # try gem install first; runner usually has Ruby
+            echo "Podfile found, installing pods..."
             sudo gem install cocoapods --no-document || true
             pod repo update || true
             pod install --repo-update || true
           else
-            echo "No Podfile."
+            echo "No Podfile in project directory"
           fi
 
-      - name: Detect workspace/project and (auto)detect scheme
+      - name: Detect workspace/project and auto-detect scheme
         id: detect
         run: |
           set -e
           cd "${PROJECT_DIR}"
-          # find workspace or project
+          # 如果有 Podfile，再 pod install — 已在上步做
+          # 查找 workspace 或 project
           WORKSPACE="$(ls *.xcworkspace 2>/dev/null || true)"
           PROJECT="$(ls *.xcodeproj 2>/dev/null || true)"
-          echo "WORKSPACE=$WORKSPACE" || true
-          echo "PROJECT=$PROJECT" || true
+          echo "WORKSPACE = '${WORKSPACE}'"
+          echo "PROJECT = '${PROJECT}'"
 
-          # expose to env
           echo "FOUND_WORKSPACE=$WORKSPACE" >> $GITHUB_ENV
           echo "FOUND_PROJECT=$PROJECT" >> $GITHUB_ENV
 
+          # 用用户输入的 scheme 优先
           INPUT_SCHEME="${{ github.event.inputs.scheme }}"
           if [ -n "$INPUT_SCHEME" ]; then
-            echo "Using scheme from workflow_dispatch: $INPUT_SCHEME"
+            echo "Using scheme from input: $INPUT_SCHEME"
             echo "SCHEME=$INPUT_SCHEME" >> $GITHUB_ENV
           else
-            # list schemes and auto-pick first one (if any)
+            # 没输入 scheme 的话，自动查询
             if [ -n "$WORKSPACE" ]; then
+              echo "Listing schemes in workspace $WORKSPACE"
               SCHEMES=$(xcodebuild -list -workspace "$WORKSPACE" 2>/dev/null | awk '/Schemes:/{f=1;next}/^$/{f=0}f{gsub(/^[ \t]+/,""); print}')
-            else
+            elif [ -n "$PROJECT" ]; then
+              echo "Listing schemes in project $PROJECT"
               SCHEMES=$(xcodebuild -list -project "$PROJECT" 2>/dev/null | awk '/Schemes:/{f=1;next}/^$/{f=0}f{gsub(/^[ \t]+/,""); print}')
+            else
+              SCHEMES=""
             fi
-            SCHEME=$(echo "$SCHEMES" | head -n1)
-            if [ -z "$SCHEME" ]; then
+
+            echo "Detected schemes:"
+            echo "$SCHEMES"
+
+            if [ -z "$SCHEMES" ]; then
               echo "::error::Cannot detect scheme automatically. Please provide scheme via workflow_dispatch input."
+              # 打印详细信息
+              if [ -n "$WORKSPACE" ]; then
+                xcodebuild -list -workspace "$WORKSPACE"
+              elif [ -n "$PROJECT" ]; then
+                xcodebuild -list -project "$PROJECT"
+              fi
               exit 1
             fi
+
+            # 取第一个 scheme
+            SCHEME=$(echo "$SCHEMES" | head -n1)
             echo "Auto-detected scheme: $SCHEME"
             echo "SCHEME=$SCHEME" >> $GITHUB_ENV
           fi
 
       - name: Show detected settings
         run: |
-          echo "PROJECT_DIR: $PROJECT_DIR"
-          echo "FOUND_WORKSPACE: $FOUND_WORKSPACE"
-          echo "FOUND_PROJECT: $FOUND_PROJECT"
-          echo "SCHEME: $SCHEME"
+          echo "Project dir: ${{ env.PROJECT_DIR }}"
+          echo "Found workspace: ${{ env.FOUND_WORKSPACE }}"
+          echo "Found project: ${{ env.FOUND_PROJECT }}"
+          echo "Scheme to use: ${{ env.SCHEME }}"
 
       - name: Archive (create unsigned .xcarchive)
         run: |
           set -e
           cd "${PROJECT_DIR}"
           mkdir -p "${BUILD_DIR}"
-          # prefer workspace if exists
-          if [ -n "$FOUND_WORKSPACE" ]; then
-            echo "Archiving workspace $FOUND_WORKSPACE scheme $SCHEME"
+          if [ -n "${FOUND_WORKSPACE}" ]; then
             xcodebuild clean archive \
-              -workspace "$FOUND_WORKSPACE" \
-              -scheme "$SCHEME" \
+              -workspace "${FOUND_WORKSPACE}" \
+              -scheme "${SCHEME}" \
               -configuration Release \
               -sdk iphoneos \
               -archivePath "${BUILD_DIR}/unsigned.xcarchive" \
               CODE_SIGN_IDENTITY="" \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO || { echo "::error::xcodebuild archive failed"; exit 1; }
+              CODE_SIGNING_ALLOWED=NO || { echo "::error::archive failed"; exit 1; }
           else
-            echo "Archiving project $FOUND_PROJECT scheme $SCHEME"
             xcodebuild clean archive \
-              -project "$FOUND_PROJECT" \
-              -scheme "$SCHEME" \
+              -project "${FOUND_PROJECT}" \
+              -scheme "${SCHEME}" \
               -configuration Release \
               -sdk iphoneos \
               -archivePath "${BUILD_DIR}/unsigned.xcarchive" \
               CODE_SIGN_IDENTITY="" \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO || { echo "::error::xcodebuild archive failed"; exit 1; }
+              CODE_SIGNING_ALLOWED=NO || { echo "::error::archive failed"; exit 1; }
           fi
 
       - name: Create unsigned IPA from .xcarchive
@@ -122,24 +136,24 @@ jobs:
           mkdir -p "${BUILD_DIR}/unsigned_ipa"
           APP_PATH=$(ls "${BUILD_DIR}/unsigned.xcarchive/Products/Applications/"*.app 2>/dev/null || true)
           if [ -z "$APP_PATH" ]; then
-            echo "::error::No .app found inside archive. Archive may have failed or layout differs."
+            echo "::error::No .app found in archive Products/Applications"
             ls -R "${BUILD_DIR}/unsigned.xcarchive" || true
             exit 1
           fi
           APP_NAME=$(basename "$APP_PATH")
-          echo "Found app: $APP_NAME"
-          # package into Payload and zip
+          echo "Found .app: $APP_NAME"
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP_PATH" "Payload/$APP_NAME"
-          # create ipa
           pushd Payload >/dev/null
           zip -r "../unsigned_ipa/${APP_NAME%.app}.ipa" . >/dev/null
           popd >/dev/null
-          ls -lh "${BUILD_DIR}/unsigned_ipa" || true
+          ls -lh "${BUILD_DIR}/unsigned_ipa"
 
-      - name: Upload unsigned IPA as artifact
+      - name: Upload unsigned IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: unsigned-ipa
           path: ${{ env.BUILD_DIR }}/unsigned_ipa/*.ipa
+          if-no-files-found: error
+
