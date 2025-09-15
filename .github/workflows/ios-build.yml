@@ -1,4 +1,4 @@
-name: iOS Build (Unsigned IPA) - Final
+name: iOS Build (Unsigned IPA) - Final Corrected
 
 on:
   workflow_dispatch:
@@ -22,11 +22,12 @@ jobs:
           xcode-version: '16.4'
 
       # 第 3 步：编译和归档 .xcarchive 文件
-      # 注意：由于没有 CocoaPods，我们现在可以直接使用 .xcodeproj 文件
+      # --- 关键修正点 ---
+      # 使用正确的 .xcodeproj 文件名: MNNLLMChat.xcodeproj
       - name: Archive Project
         run: |
           xcodebuild archive \
-            -project apps/iOS/MNNLLMChat/MNLLMiOS.xcodeproj \
+            -project apps/iOS/MNNLLMChat/MNNLLMChat.xcodeproj \
             -scheme MNNLLMiOS \
             -configuration Release \
             -destination 'generic/platform=iOS' \
@@ -42,6 +43,7 @@ jobs:
           mkdir -p build/ipa/Payload
           
           # 从归档文件中拷贝 .app 到 Payload 文件夹
+          # 最终的 .app 名称是 MNNLLMChat.app
           cp -R build/MNNLLMChat.xcarchive/Products/Applications/MNNLLMChat.app build/ipa/Payload/
           
           # 进入打包目录并压缩
