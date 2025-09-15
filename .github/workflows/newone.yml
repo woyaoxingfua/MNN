@@ -1,0 +1,77 @@
+name: Build MNNLLMChat iOS (Unsigned)
+
+on:
+  push:
+    paths:
+      - 'apps/iOS/MNNLLMChat/**'
+      - 'package_scripts/ios/**'
+      - 'transformers/llm/engine/ios/**'
+  pull_request:
+    paths:
+      - 'apps/iOS/MNNLLMChat/**'
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          brew install coreutils
+          # 确保 Xcode 命令行工具可用
+          xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build MNN.framework
+        run: |
+          sh package_scripts/ios/buildiOS.sh "
+          -DMNN_ARM82=ON
+          -DMNN_LOW_MEMORY=ON
+          -DMNN_SUPPORT_TRANSFORMER_FUSE=ON
+          -DMNN_BUILD_LLM=ON
+          -DMNN_CPU_WEIGHT_DEQUANT_GEMM=ON
+          -DMNN_METAL=ON
+          -DMNN_BUILD_DIFFUSION=ON
+          -DMNN_OPENCL=OFF
+          -DMNN_SEP_BUILD=OFF
+          -DLLM_SUPPORT_AUDIO=ON
+          -DMNN_BUILD_AUDIO=ON
+          -DLLM_SUPPORT_VISION=ON
+          -DMNN_BUILD_OPENCV=ON
+          -DMNN_IMGCODECS=ON
+          "
+
+      - name: Copy MNN.framework to project
+        run: |
+          mv MNN-iOS-CPU-GPU/Static/MNN.framework apps/iOS/MNNLLMChat/
+
+      - name: Build unsigned IPA
+        run: |
+          cd apps/iOS/MNNLLMChat
+          # 创建编译输出目录
+          mkdir -p build/Release-iphoneos
+          # 编译项目（无签名）
+          xcodebuild build \
+            -project MNNLLMiOS.xcodeproj \
+            -scheme MNNLLMiOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            BUILD_DIR=build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+          # 打包成 IPA
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/MNNLLMiOS.app Payload/
+          zip -r MNNLLMChat-unsigned.ipa Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mnnllmchat-unsigned-ipa
+          path: apps/iOS/MNNLLMChat/MNNLLMChat-unsigned.ipa
