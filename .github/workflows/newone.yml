@@ -48,20 +48,13 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
-      # 第 5 步：【已修改】手动创建未签名的 IPA
-      # 我们不再使用 xcodebuild -exportArchive，而是直接从 .xcarchive 中提取 .app 并打包
+      # 第 5 步：【已修正】手动创建未签名的 IPA
       - name: Manually Create Unsigned IPA
         run: |
-          # 创建一个用于打包的 Payload 文件夹
           mkdir -p build/ipa/Payload
-          
-          # 从归档文件中拷贝 .app 到 Payload 文件夹
-          cp -R build/MNNLLMChat.xcarchive/Products/Applications/MNLLMiOS.app build/ipa/Payload/
-          
-          # 进入打包目录
+          # 修正点：将 MNLLMiOS.app 改为 MNNLLMChat.app
+          cp -R build/MNNLLMChat.xcarchive/Products/Applications/MNNLLMChat.app build/ipa/Payload/
           cd build/ipa
-          
-          # 将 Payload 文件夹压缩成 IPA 文件
           zip -r MNNLLMChat-unsigned.ipa Payload
 
       # 第 6 步：上传构建产物 (IPA)
@@ -69,5 +62,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MNNLLMChat-unsigned-ipa
-          # 注意路径的变化
           path: build/ipa/*.ipa
