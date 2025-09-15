@@ -1,4 +1,4 @@
-name: iOS Build (Unsigned IPA)
+name: iOS Build (Unsigned IPA) - Final
 
 on:
   workflow_dispatch:
@@ -21,16 +21,12 @@ jobs:
         with:
           xcode-version: '16.4'
 
-      # 第 3 步：安装 CocoaPods 依赖
-      - name: Install Pods
-        # 直接指定项目目录，确保路径正确
-        run: pod install --project-directory=apps/iOS/MNNLLMChat
-
-      # 第 4 步：编译和归档 .xcarchive 文件
+      # 第 3 步：编译和归档 .xcarchive 文件
+      # 注意：由于没有 CocoaPods，我们现在可以直接使用 .xcodeproj 文件
       - name: Archive Project
         run: |
           xcodebuild archive \
-            -workspace apps/iOS/MNNLLMChat/MNNLLMChat.xcworkspace \
+            -project apps/iOS/MNNLLMChat/MNLLMiOS.xcodeproj \
             -scheme MNNLLMiOS \
             -configuration Release \
             -destination 'generic/platform=iOS' \
@@ -39,21 +35,20 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
-      # 第 5 步：手动将 .app 打包成 .ipa
+      # 第 4 步：手动将 .app 打包成 .ipa
       - name: Create Unsigned IPA
         run: |
           # 创建用于打包的 Payload 文件夹
           mkdir -p build/ipa/Payload
           
           # 从归档文件中拷贝 .app 到 Payload 文件夹
-          # 注意：根据之前的经验，最终产物是 MNNLLMChat.app
           cp -R build/MNNLLMChat.xcarchive/Products/Applications/MNNLLMChat.app build/ipa/Payload/
           
           # 进入打包目录并压缩
           cd build/ipa
           zip -r MNNLLMChat-unsigned.ipa Payload
 
-      # 第 6 步：上传 IPA 文件
+      # 第 5 步：上传 IPA 文件
       - name: Upload Unsigned IPA
         uses: actions/upload-artifact@v4
         with:
