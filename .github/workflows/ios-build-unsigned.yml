@@ -1,0 +1,131 @@
+name: iOS Build (unsigned IPA, auto-detect project & scheme)
+
+on:
+  workflow_dispatch:
+    inputs:
+      scheme:
+        description: '可选：强制指定 scheme 名称（不填则尝试自动检测）'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      PROJECT_DIR: apps/iOS/MNNLLMChat
+      BUILD_DIR: ${{ github.workspace }}/build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Show repo subtree (debug)
+        run: |
+          echo "PWD: $(pwd)"
+          echo "Listing project dir:"
+          ls -la "${PROJECT_DIR}" || true
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest
+
+      - name: Install CocoaPods (if Podfile present)
+        run: |
+          cd "${PROJECT_DIR}" || exit 0
+          if [ -f "Podfile" ]; then
+            echo "Podfile found — installing pods"
+            sudo gem install cocoapods --no-document || true
+            pod install --repo-update || true
+          else
+            echo "No Podfile"
+          fi
+
+      - name: Auto-detect .xcodeproj and scheme (or use input)
+        id: detect
+        run: |
+          set -e
+          cd "${PROJECT_DIR}"
+
+          # find an xcodeproj (take the first match)
+          PROJECT_PATH="$(echo ${PROJECT_DIR}/*.xcodeproj 2>/dev/null | awk '{print $1}')"
+          if [ -z "$PROJECT_PATH" ] || [ "$PROJECT_PATH" = "${PROJECT_DIR}/*.xcodeproj" ]; then
+            echo "::error::No .xcodeproj found under ${PROJECT_DIR}"
+            ls -la "${PROJECT_DIR}" || true
+            exit 1
+          fi
+          echo "Found project path: $PROJECT_PATH"
+          echo "PROJECT_PATH=$PROJECT_PATH" >> $GITHUB_ENV
+
+          # scheme priority: workflow input > shared xcscheme file > project basename
+          if [ -n "${{ github.event.inputs.scheme }}" ]; then
+            SCHEME="${{ github.event.inputs.scheme }}"
+            echo "Using scheme from workflow input: $SCHEME"
+          else
+            # look for shared schemes inside the xcodeproj
+            SCHEME_FILE="$(ls "$PROJECT_PATH/xcshareddata/xcschemes/"*.xcscheme 2>/dev/null | head -n1 || true)"
+            if [ -n "$SCHEME_FILE" ]; then
+              SCHEME="$(basename "$SCHEME_FILE" .xcscheme)"
+              echo "Auto-detected shared scheme from xcschemes: $SCHEME"
+            else
+              # fallback to project name
+              PROJ_NAME="$(basename "$PROJECT_PATH" .xcodeproj)"
+              SCHEME="$PROJ_NAME"
+              echo "No shared xcscheme found — fallback scheme = project name: $SCHEME"
+            fi
+          fi
+
+          echo "SCHEME=$SCHEME" >> $GITHUB_ENV
+          echo "Detected PROJECT_PATH=${PROJECT_PATH}"
+          echo "Detected SCHEME=${SCHEME}"
+
+      - name: Archive (create unsigned .xcarchive)
+        run: |
+          set -e
+          mkdir -p "${BUILD_DIR}"
+          echo "Archiving project=${PROJECT_PATH} scheme=${SCHEME}"
+          xcodebuild clean archive \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "${BUILD_DIR}/${SCHEME}.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" || {
+              echo "::error::xcodebuild archive failed. Printing xcodebuild -list for debugging:"
+              xcodebuild -list -project "${PROJECT_PATH}" || true
+              ls -R "${BUILD_DIR}" || true
+              exit 1
+            }
+
+      - name: Create unsigned IPA (pack .app -> Payload -> zip)
+        run: |
+          set -e
+          ARCHIVE="${BUILD_DIR}/${SCHEME}.xcarchive"
+          APP_PATH=$(ls "${ARCHIVE}/Products/Applications/"*.app 2>/dev/null | head -n1 || true)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app found inside ${ARCHIVE}/Products/Applications. Archive may have failed."
+            ls -R "${ARCHIVE}" || true
+            exit 1
+          fi
+          echo "Found app: $APP_PATH"
+          mkdir -p "${BUILD_DIR}/unsigned_ipa"
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP_PATH" "Payload/"
+          pushd Payload >/dev/null
+          zip -r "../unsigned_ipa/${SCHEME}-unsigned.ipa" . >/dev/null
+          popd >/dev/null
+          echo "Unsigned ipa created at: ${BUILD_DIR}/unsigned_ipa/${SCHEME}-unsigned.ipa"
+          ls -lh "${BUILD_DIR}/unsigned_ipa" || true
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ipa
+          path: ${{ env.BUILD_DIR }}/unsigned_ipa/*.ipa
+          if-no-files-found: error
