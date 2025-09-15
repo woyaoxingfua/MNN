@@ -23,8 +23,10 @@ jobs:
       - name: Install dependencies
         run: |
           brew install coreutils
-          # 确保 Xcode 命令行工具可用
-          xcode-select -s /Applications/Xcode.app/Contents/Developer
+          # 增加 sudo 以获取 root 权限
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          # 额外添加：接受 Xcode 许可证（CI 环境可能需要）
+          sudo xcodebuild -license accept
 
       - name: Build MNN.framework
         run: |
